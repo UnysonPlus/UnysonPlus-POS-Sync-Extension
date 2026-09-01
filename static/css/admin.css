@@ -1,0 +1,84 @@
+/**
+ * Unyson+ -> POS Sync admin screen.
+ *
+ * Deliberately small and native-looking: this screen is read under pressure,
+ * when a stock number is wrong and someone wants an answer. It should look like
+ * the rest of wp-admin, not like a dashboard.
+ */
+
+.fw-pos-status {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 24px;
+	align-items: center;
+	margin: 16px 0;
+	padding: 12px 16px;
+	background: #fff;
+	border: 1px solid #c3c4c7;
+	border-radius: 4px;
+}
+
+.fw-pos-status__item {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 110px;
+}
+
+.fw-pos-status__label {
+	font-size: 11px;
+	text-transform: uppercase;
+	letter-spacing: .04em;
+	color: #646970;
+}
+
+.fw-pos-status__item strong {
+	font-size: 16px;
+	line-height: 1.2;
+}
+
+.fw-pos-status__actions {
+	margin-left: auto;
+}
+
+.fw-pos-status__actions form {
+	margin: 0;
+}
+
+/* Outcome badges. `duplicate` and `skipped` share the neutral style on purpose:
+   a refused replay is the system working, and colouring it like a warning
+   generates bug reports about correct behaviour. */
+.fw-pos-badge {
+	display: inline-block;
+	padding: 2px 8px;
+	border-radius: 999px;
+	font-size: 11px;
+	font-weight: 600;
+	line-height: 1.6;
+	border: 1px solid currentColor;
+}
+
+.fw-pos-badge.is-applied {
+	color: #007017;
+}
+
+.fw-pos-badge.is-failed {
+	color: #b32d2e;
+}
+
+.fw-pos-badge.is-pending {
+	color: #996800;
+}
+
+.fw-pos-badge.is-neutral {
+	color: #646970;
+}
+
+.fw-pos-reason {
+	margin: 6px 0 0;
+	max-width: 46em;
+}
+
+.fw-pos-sync .column-external_id code {
+	font-size: 12px;
+}
