@@ -11,7 +11,7 @@ $manifest['description'] = __(
 	'fw'
 );
 
-$manifest['version']    = '1.0.0';
+$manifest['version']    = '1.0.1';
 $manifest['display']    = true;
 $manifest['standalone'] = true;
 
@@ -33,6 +33,48 @@ $manifest['requires_wp']  = '5.8';
 /**
  * Changelog
  * -----------------------------------------------------------------------------
+ * 1.0.1 - Milestone 2: the store driver seam, and WooCommerce on the end of it.
+ *
+ *         FW_POS_Store is the one place in the extension allowed to know a
+ *         specific cart exists. Everything crossing it is a primitive - a SKU
+ *         string, an integer quantity, an opaque store reference - so nothing
+ *         above it acquires a WooCommerce shape.
+ *
+ *         It was deliberately drafted against TWO implementations, WooCommerce
+ *         to ship and FluentCart on paper, because an interface designed
+ *         against one always encodes that one's assumptions and you find out at
+ *         the second, when it is expensive. Two things changed as a result and
+ *         are worth keeping: find_by_sku() returns an opaque string rather than
+ *         a post ID, which FluentCart's custom tables would not have survived;
+ *         and get_capabilities() exists at all, because carts genuinely differ
+ *         on partial refunds and per-location stock and the ledger has to
+ *         degrade rather than fatal.
+ *
+ *         The WooCommerce driver writes stock through wc_update_product_stock()
+ *         rather than product meta, so Woo's own stock-status transitions and
+ *         low-stock notifications still fire; it is HPOS-safe; and it falls
+ *         through to a variation query, because variable products carry their
+ *         SKUs on the variation and a parent-only lookup misses most real
+ *         catalogs.
+ *
+ *         Matching is SKU first, GTIN second, never name - two products called
+ *         "Blue Hoodie" would otherwise swap stock with nothing in the log to
+ *         say it happened. An item matching nothing goes to a new Unmatched
+ *         screen rather than being auto-created, because inventing products
+ *         from till data fills a catalog with MISC-1 within days. One click
+ *         there maps it, clears it, or marks it permanently not-a-stock-item
+ *         for the carrier bags and service charges every shop rings up - and
+ *         mapping a SKU re-queues the events it previously blocked.
+ *
+ *         An event with any unresolvable line is skipped WHOLE. Half a sale
+ *         leaves stock wrong in a way nobody can see; a skipped event says
+ *         exactly what it needs.
+ *
+ *         Recording till sales as store orders is off by default: a shop's POS
+ *         already reports its own takings, so mirroring every counter sale into
+ *         WooCommerce double-counts revenue across the two systems and buries
+ *         genuine online orders among walk-ins.
+ *
  * 1.0.0 - Milestone 1: the ledger. The provider-agnostic core that every POS
  *         driver and every store driver will sit on top of, shipped before
  *         either exists because it is the part that has to be right.

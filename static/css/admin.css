@@ -82,3 +82,12 @@
 .fw-pos-sync .column-external_id code {
 	font-size: 12px;
 }
+
+.fw-pos-intro {
+	max-width: 60em;
+	margin: 12px 0;
+}
+
+.fw-pos-requeue {
+	margin: 0 0 12px;
+}

@@ -16,17 +16,19 @@
  *   Schema      class-fw-pos-schema.php   — the ONLY DDL. Tables + migrations.
  *   Ledger      class-fw-pos-ledger.php   — the ONLY SQL. Dumb repository.
  *   Queue       class-fw-pos-queue.php    — ordering, retries, the apply filter.
+ *   Matcher     class-fw-pos-matcher.php  — SKU/GTIN resolution + unmatched queue.
+ *   Applier     class-fw-pos-applier.php  — turns events into store writes.
+ *   Stores      stores/…                  — the ONLY cart-specific code.
  *   Log/Admin   class-fw-pos-log*.php     — presentation over the repository.
  *
  * Nothing above the ledger writes SQL; the ledger holds no business rules and
- * fires no hooks. Keep it that way — it is what lets the store drivers (M2),
- * the webhook API (M3), the Virtual Terminal (M4) and the Square driver (M5)
- * arrive without a rewrite.
+ * fires no hooks; nothing outside `stores/` knows which cart is installed.
+ * Keep it that way — it is what lets the webhook API (M3), the Virtual Terminal
+ * (M4) and the Square driver (M5) arrive without a rewrite.
  *
- * Milestone 1 ships the middle only. There is no store driver yet, so events
- * are recorded and then skipped with a visible `no_store_driver` reason rather
- * than silently dropped — an empty log and a log full of explained skips are
- * very different support conversations.
+ * Shipped so far: the ledger (M1) and the store driver seam with its
+ * WooCommerce implementation (M2). No POS driver exists yet, so events reach
+ * the ledger only through code — the signed webhook endpoint is M3.
  *
  * @see https://docs.unysonplus.com/extensions/pos-sync/architecture
  */
@@ -45,6 +47,11 @@ class FW_Extension_POS_Sync extends FW_Extension {
 		require_once $dir . 'class-fw-pos-ledger.php';
 		require_once $dir . 'class-fw-pos-queue.php';
 		require_once $dir . 'class-fw-pos-log.php';
+		require_once $dir . 'class-fw-pos-matcher.php';
+		require_once $dir . 'stores/class-fw-pos-store.php';
+		require_once $dir . 'stores/class-fw-pos-store-woocommerce.php';
+		require_once $dir . 'stores/class-fw-pos-stores.php';
+		require_once $dir . 'class-fw-pos-applier.php';
 
 		// Schema check. One autoloaded get_option() when up to date, so it is
 		// cheap enough to run on every load — which is what makes activation and
@@ -55,8 +62,13 @@ class FW_Extension_POS_Sync extends FW_Extension {
 		$this->queue = new FW_POS_Queue();
 		$this->queue->register();
 
+		// The store seam's consumer. Registered on the front end too, because
+		// the queue drains wherever cron runs.
+		( new FW_POS_Applier( $this ) )->register();
+
 		if ( is_admin() ) {
 			require_once $dir . 'class-fw-pos-log-table.php';
+			require_once $dir . 'class-fw-pos-items-table.php';
 			require_once $dir . 'class-fw-pos-admin-page.php';
 
 			new FW_POS_Admin_Page( $this );
@@ -145,11 +157,13 @@ class FW_Extension_POS_Sync extends FW_Extension {
 		$values = (array) fw_get_db_ext_settings_option( $this->get_name() );
 
 		$defaults = [
-			'mode'         => 'test',
-			'retention'    => '90',
-			'batch_size'   => '20',
-			'clock_skew'   => '2',
-			'refuse_stale' => true,
+			'mode'          => 'test',
+			'store_driver'  => '',
+			'create_orders' => false,
+			'retention'     => '90',
+			'batch_size'    => '20',
+			'clock_skew'    => '2',
+			'refuse_stale'  => true,
 		];
 
 		$settings = [];
@@ -174,5 +188,22 @@ class FW_Extension_POS_Sync extends FW_Extension {
 		$settings = $this->get_settings();
 
 		return 'live' === $settings['mode'];
+	}
+
+	/**
+	 * Should a till sale also be recorded as a store order?
+	 *
+	 * Off by default, and deliberately so. A shop's POS already reports its own
+	 * takings; mirroring every counter sale into WooCommerce double-counts
+	 * revenue across the two systems and buries genuine online orders in a list
+	 * of walk-ins. Shops that want one ledger for everything can turn it on —
+	 * but it should be a decision, not a surprise.
+	 *
+	 * @return bool
+	 */
+	public function should_create_orders() {
+		$settings = $this->get_settings();
+
+		return ! empty( $settings['create_orders'] );
 	}
 }

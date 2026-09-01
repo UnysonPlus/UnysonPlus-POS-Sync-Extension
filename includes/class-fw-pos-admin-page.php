@@ -33,6 +33,9 @@ class FW_POS_Admin_Page {
 	/** @var FW_POS_Log_Table|null */
 	private $table = null;
 
+	/** @var FW_POS_Items_Table|null */
+	private $items_table = null;
+
 	/**
 	 * @param FW_Extension_POS_Sync $ext
 	 */
@@ -101,20 +104,31 @@ class FW_POS_Admin_Page {
 	 * @internal
 	 */
 	public function _load() {
+		$tab = $this->current_tab();
+
 		add_screen_option(
 			'per_page',
-			[
-				'label'   => __( 'Events per page', 'fw' ),
-				'default' => 20,
-				'option'  => 'fw_pos_events_per_page',
-			]
+			'items' === $tab
+				? [
+					'label'   => __( 'Items per page', 'fw' ),
+					'default' => 20,
+					'option'  => 'fw_pos_items_per_page',
+				]
+				: [
+					'label'   => __( 'Events per page', 'fw' ),
+					'default' => 20,
+					'option'  => 'fw_pos_events_per_page',
+				]
 		);
 
 		$this->handle_actions();
 
-		if ( 'log' === $this->current_tab() ) {
+		if ( 'log' === $tab ) {
 			$this->table = new FW_POS_Log_Table();
 			$this->table->prepare_items();
+		} elseif ( 'items' === $tab ) {
+			$this->items_table = new FW_POS_Items_Table();
+			$this->items_table->prepare_items();
 		}
 	}
 
@@ -122,6 +136,9 @@ class FW_POS_Admin_Page {
 	 * Dispatch POST actions, then redirect (PRG) so a refresh cannot repeat one.
 	 */
 	private function handle_actions() {
+		$this->handle_item_actions();
+		$this->handle_bulk_item_actions();
+
 		if ( empty( $_POST['fw_pos_action'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification
 			return;
 		}
@@ -163,6 +180,27 @@ class FW_POS_Admin_Page {
 					'text' => __( 'Database tables checked and brought up to date.', 'fw' ),
 				];
 				break;
+
+			case 'requeue_skipped':
+				// The payoff for skipping loudly instead of dropping: once a
+				// store is connected or a SKU is mapped, the events that could
+				// not be applied before are still here and still replayable.
+				$reason = isset( $_POST['reason'] ) ? sanitize_text_field( wp_unslash( $_POST['reason'] ) ) : '';
+				$count  = $reason ? FW_POS_Ledger::requeue_skipped( $reason ) : 0;
+
+				if ( $count ) {
+					FW_POS_Queue::schedule();
+				}
+
+				$notice = [
+					'type' => 'success',
+					'text' => sprintf(
+						/* translators: %d: number of events re-queued */
+						_n( '%d skipped event re-queued.', '%d skipped events re-queued.', $count, 'fw' ),
+						$count
+					),
+				];
+				break;
 		}
 
 		if ( $notice ) {
@@ -174,6 +212,174 @@ class FW_POS_Admin_Page {
 				[
 					'page' => self::PAGE_SLUG,
 					'tab'  => $this->current_tab(),
+				],
+				admin_url( 'admin.php' )
+			)
+		);
+		exit;
+	}
+
+	/**
+	 * Row actions on the Unmatched screen. GET links with a nonce, PRG-redirected.
+	 */
+	private function handle_item_actions() {
+		// phpcs:ignore WordPress.Security.NonceVerification
+		if ( empty( $_GET['fw_pos_action'] ) || empty( $_GET['item_id'] ) ) {
+			return;
+		}
+
+		if ( ! current_user_can( self::capability() ) ) {
+			wp_die( esc_html__( 'You do not have permission to do that.', 'fw' ) );
+		}
+
+		check_admin_referer( self::NONCE );
+
+		$action  = sanitize_key( wp_unslash( $_GET['fw_pos_action'] ) );
+		$item_id = (int) $_GET['item_id'];
+		$notice  = null;
+
+		switch ( $action ) {
+			case 'ignore_item':
+				FW_POS_Ledger::ignore_item( $item_id );
+				$notice = [
+					'type' => 'success',
+					'text' => __( 'Marked as not a stock item. It will be skipped from now on without filling the queue.', 'fw' ),
+				];
+				break;
+
+			case 'unignore_item':
+			case 'unmatch_item':
+				FW_POS_Ledger::set_item_match( $item_id, '' );
+				$notice = [
+					'type' => 'success',
+					'text' => __( 'Item returned to the unmatched queue.', 'fw' ),
+				];
+				break;
+
+			case 'rematch_item':
+				$notice = $this->rematch( $item_id );
+				break;
+
+			default:
+				return;
+		}
+
+		if ( $notice ) {
+			set_transient( self::TRANSIENT_NOTICE . get_current_user_id(), $notice, MINUTE_IN_SECONDS );
+		}
+
+		$this->redirect_to_tab( 'items' );
+	}
+
+	/**
+	 * Bulk "not a stock item" on the Unmatched screen.
+	 */
+	private function handle_bulk_item_actions() {
+		// phpcs:ignore WordPress.Security.NonceVerification
+		if ( empty( $_POST['item_ids'] ) || ! is_array( $_POST['item_ids'] ) ) {
+			return;
+		}
+
+		if ( ! current_user_can( self::capability() ) ) {
+			wp_die( esc_html__( 'You do not have permission to do that.', 'fw' ) );
+		}
+
+		check_admin_referer( 'bulk-pos_items' );
+
+		$table  = new FW_POS_Items_Table();
+		$action = $table->current_action();
+
+		if ( 'ignore' !== $action ) {
+			return;
+		}
+
+		$ids = array_map( 'intval', wp_unslash( $_POST['item_ids'] ) ); // phpcs:ignore WordPress.Security
+
+		foreach ( $ids as $id ) {
+			FW_POS_Ledger::ignore_item( $id );
+		}
+
+		set_transient(
+			self::TRANSIENT_NOTICE . get_current_user_id(),
+			[
+				'type' => 'success',
+				'text' => sprintf(
+					/* translators: %d: number of items */
+					_n( '%d item marked as not a stock item.', '%d items marked as not stock items.', count( $ids ), 'fw' ),
+					count( $ids )
+				),
+			],
+			MINUTE_IN_SECONDS
+		);
+
+		$this->redirect_to_tab( 'items' );
+	}
+
+	/**
+	 * Try the lookup again for one item — after the merchant has added the SKU
+	 * to a product, which is the usual fix.
+	 *
+	 * On success this also re-queues every event previously skipped for an
+	 * unmatched SKU, which is the whole reason those events were kept.
+	 *
+	 * @param int $item_id
+	 *
+	 * @return array{type:string,text:string}
+	 */
+	private function rematch( $item_id ) {
+		$item  = FW_POS_Ledger::get_item( $item_id );
+		$store = FW_POS_Stores::active();
+
+		if ( ! $item || ! $store ) {
+			return [
+				'type' => 'error',
+				'text' => __( 'Could not look that up — no store is connected.', 'fw' ),
+			];
+		}
+
+		$ref = $store->find_by_sku( $item['sku'], $item['gtin'] );
+
+		if ( ! $ref ) {
+			return [
+				'type' => 'warning',
+				'text' => sprintf(
+					/* translators: %s: SKU */
+					__( 'Still no product with the SKU %s. Add it to the product this should track, then try again.', 'fw' ),
+					$item['sku']
+				),
+			];
+		}
+
+		FW_POS_Ledger::set_item_match( $item_id, $ref );
+
+		$requeued = FW_POS_Ledger::requeue_skipped( 'unmatched_sku' );
+
+		if ( $requeued ) {
+			FW_POS_Queue::schedule();
+		}
+
+		return [
+			'type' => 'success',
+			'text' => sprintf(
+				/* translators: 1: product name, 2: number of events re-queued */
+				__( 'Matched to %1$s. %2$d previously skipped events were re-queued.', 'fw' ),
+				$store->describe( $ref ),
+				$requeued
+			),
+		];
+	}
+
+	/**
+	 * PRG redirect back to a tab.
+	 *
+	 * @param string $tab
+	 */
+	private function redirect_to_tab( $tab ) {
+		wp_safe_redirect(
+			add_query_arg(
+				[
+					'page' => self::PAGE_SLUG,
+					'tab'  => $tab,
 				],
 				admin_url( 'admin.php' )
 			)
@@ -208,7 +414,7 @@ class FW_POS_Admin_Page {
 		// phpcs:ignore WordPress.Security.NonceVerification
 		$tab = isset( $_GET['tab'] ) ? sanitize_key( wp_unslash( $_GET['tab'] ) ) : 'log';
 
-		return in_array( $tab, [ 'log', 'settings' ], true ) ? $tab : 'log';
+		return in_array( $tab, [ 'log', 'items', 'settings' ], true ) ? $tab : 'log';
 	}
 
 	/**
@@ -222,8 +428,19 @@ class FW_POS_Admin_Page {
 			delete_transient( self::TRANSIENT_NOTICE . get_current_user_id() );
 		}
 
+		$unmatched = FW_POS_Schema::is_installed()
+			? FW_POS_Ledger::count_items( [ 'status' => FW_POS_Ledger::ITEM_UNMATCHED ] )
+			: 0;
+
 		$tabs = [
 			'log'      => __( 'Log', 'fw' ),
+			'items'    => $unmatched
+				? sprintf(
+					/* translators: %d: number of unmatched items */
+					__( 'Unmatched (%d)', 'fw' ),
+					$unmatched
+				)
+				: __( 'Items', 'fw' ),
 			'settings' => __( 'Settings', 'fw' ),
 		];
 
@@ -246,6 +463,15 @@ class FW_POS_Admin_Page {
 	}
 
 	/**
+	 * The items table, for the view.
+	 *
+	 * @return FW_POS_Items_Table|null
+	 */
+	public function get_items_table() {
+		return $this->items_table;
+	}
+
+	/**
 	 * Health facts the view shows above the table.
 	 *
 	 * Deliberately the things that explain a silent system: is the schema
@@ -255,12 +481,20 @@ class FW_POS_Admin_Page {
 	 * @return array
 	 */
 	public function get_status() {
+		$store = FW_POS_Stores::active();
+
 		return [
-			'installed'  => FW_POS_Schema::is_installed(),
-			'scheduler'  => FW_POS_Queue::has_action_scheduler() ? 'Action Scheduler' : 'WP-Cron',
-			'pending'    => FW_POS_Schema::is_installed() ? FW_POS_Ledger::pending_count() : 0,
-			'has_driver' => (bool) has_filter( 'fw_pos_apply_event' ),
-			'endpoint'   => rest_url( 'unysonplus-pos/v1/' ),
+			'installed'   => FW_POS_Schema::is_installed(),
+			'scheduler'   => FW_POS_Queue::has_action_scheduler() ? 'Action Scheduler' : 'WP-Cron',
+			'pending'     => FW_POS_Schema::is_installed() ? FW_POS_Ledger::pending_count() : 0,
+			'has_driver'  => (bool) $store,
+			'store_label' => $store ? $store->get_label() : '',
+			'store_why'   => FW_POS_Stores::inactive_reason(),
+			'live'        => $this->ext->is_live(),
+			'unmatched'   => FW_POS_Schema::is_installed()
+				? FW_POS_Ledger::count_items( [ 'status' => FW_POS_Ledger::ITEM_UNMATCHED ] )
+				: 0,
+			'endpoint'    => rest_url( 'unysonplus-pos/v1/' ),
 		];
 	}
 }

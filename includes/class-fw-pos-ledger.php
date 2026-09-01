@@ -483,9 +483,298 @@ class FW_POS_Ledger {
 		);
 	}
 
+	/** Item statuses. */
+	const ITEM_UNMATCHED = 'unmatched';
+	const ITEM_MATCHED   = 'matched';
+	const ITEM_IGNORED   = 'ignored';
+
+	/**
+	 * Record an item seen at the till, or refresh what we know about it.
+	 *
+	 * Keyed on SKU, which is the only identifier both systems reliably share.
+	 * An existing row's `status` and `store_ref` are never overwritten here — a
+	 * mapping a human made, or an item they deliberately ignored, must survive
+	 * the next sale mentioning it.
+	 *
+	 * @param array $item {
+	 *     @type string $sku  Required.
+	 *     @type string $gtin
+	 *     @type string $name
+	 * }
+	 *
+	 * @return int|null Item id, or null when there is no SKU to key on.
+	 */
+	public static function upsert_item( array $item ) {
+		global $wpdb;
+
+		$sku = isset( $item['sku'] ) ? substr( (string) $item['sku'], 0, 100 ) : '';
+
+		if ( '' === $sku ) {
+			return null;
+		}
+
+		$table = FW_POS_Schema::table( 'items' );
+		$now   = current_time( 'mysql', true );
+
+		$existing = self::get_item_by_sku( $sku );
+
+		if ( $existing ) {
+			$update = [ 'updated_at' => $now ];
+			$format = [ '%s' ];
+
+			// Fill in blanks only — never clobber what is already known.
+			foreach ( [ 'gtin', 'name' ] as $key ) {
+				if ( '' === (string) $existing[ $key ] && ! empty( $item[ $key ] ) ) {
+					$update[ $key ] = (string) $item[ $key ];
+					$format[]       = '%s';
+				}
+			}
+
+			$wpdb->update( $table, $update, [ 'id' => (int) $existing['id'] ], $format, [ '%d' ] );
+
+			return (int) $existing['id'];
+		}
+
+		$wpdb->insert(
+			$table,
+			[
+				'sku'        => $sku,
+				'gtin'       => isset( $item['gtin'] ) ? substr( (string) $item['gtin'], 0, 64 ) : '',
+				'name'       => isset( $item['name'] ) ? substr( (string) $item['name'], 0, 190 ) : '',
+				'store_ref'  => '',
+				'status'     => self::ITEM_UNMATCHED,
+				'created_at' => $now,
+				'updated_at' => $now,
+			],
+			[ '%s', '%s', '%s', '%s', '%s', '%s', '%s' ]
+		);
+
+		return (int) $wpdb->insert_id;
+	}
+
+	/**
+	 * @param string $sku
+	 *
+	 * @return array|null
+	 */
+	public static function get_item_by_sku( $sku ) {
+		global $wpdb;
+
+		$table = FW_POS_Schema::table( 'items' );
+
+		$row = $wpdb->get_row(
+			$wpdb->prepare( "SELECT * FROM {$table} WHERE sku = %s LIMIT 1", (string) $sku ), // phpcs:ignore WordPress.DB.PreparedSQL
+			ARRAY_A
+		);
+
+		return $row ? $row : null;
+	}
+
+	/**
+	 * @param int $item_id
+	 *
+	 * @return array|null
+	 */
+	public static function get_item( $item_id ) {
+		global $wpdb;
+
+		$table = FW_POS_Schema::table( 'items' );
+
+		$row = $wpdb->get_row(
+			$wpdb->prepare( "SELECT * FROM {$table} WHERE id = %d", (int) $item_id ), // phpcs:ignore WordPress.DB.PreparedSQL
+			ARRAY_A
+		);
+
+		return $row ? $row : null;
+	}
+
+	/**
+	 * Bind an item to a store product, or clear the binding.
+	 *
+	 * @param int    $item_id
+	 * @param string $store_ref Opaque driver reference, or '' to unmatch.
+	 *
+	 * @return bool
+	 */
+	public static function set_item_match( $item_id, $store_ref ) {
+		global $wpdb;
+
+		$store_ref = (string) $store_ref;
+
+		return (bool) $wpdb->update(
+			FW_POS_Schema::table( 'items' ),
+			[
+				'store_ref'  => $store_ref,
+				'status'     => '' === $store_ref ? self::ITEM_UNMATCHED : self::ITEM_MATCHED,
+				'updated_at' => current_time( 'mysql', true ),
+			],
+			[ 'id' => (int) $item_id ],
+			[ '%s', '%s', '%s' ],
+			[ '%d' ]
+		);
+	}
+
+	/**
+	 * Mark an item as deliberately not a stock item.
+	 *
+	 * Every real shop rings up things that are not products — a carrier bag, a
+	 * service charge, a discount line. Without this they would sit in the
+	 * unmatched queue forever and train people to ignore it.
+	 *
+	 * @param int $item_id
+	 *
+	 * @return bool
+	 */
+	public static function ignore_item( $item_id ) {
+		global $wpdb;
+
+		return (bool) $wpdb->update(
+			FW_POS_Schema::table( 'items' ),
+			[
+				'status'     => self::ITEM_IGNORED,
+				'updated_at' => current_time( 'mysql', true ),
+			],
+			[ 'id' => (int) $item_id ],
+			[ '%s', '%s' ],
+			[ '%d' ]
+		);
+	}
+
+	/**
+	 * @param array $args {
+	 *     @type string $status
+	 *     @type string $search   Matches sku, gtin or name.
+	 *     @type int    $per_page
+	 *     @type int    $page
+	 * }
+	 *
+	 * @return array[]
+	 */
+	public static function query_items( array $args = [] ) {
+		global $wpdb;
+
+		$table  = FW_POS_Schema::table( 'items' );
+		$where  = self::build_item_where( $args );
+		$limit  = isset( $args['per_page'] ) ? max( 1, (int) $args['per_page'] ) : 20;
+		$page   = isset( $args['page'] ) ? max( 1, (int) $args['page'] ) : 1;
+		$offset = ( $page - 1 ) * $limit;
+
+		$sql      = "SELECT * FROM {$table} {$where['sql']} ORDER BY updated_at DESC, id DESC LIMIT %d OFFSET %d";
+		$params   = $where['params'];
+		$params[] = $limit;
+		$params[] = $offset;
+
+		return (array) $wpdb->get_results(
+			$wpdb->prepare( $sql, $params ), // phpcs:ignore WordPress.DB.PreparedSQL
+			ARRAY_A
+		);
+	}
+
+	/**
+	 * @param array $args Same shape as query_items().
+	 *
+	 * @return int
+	 */
+	public static function count_items( array $args = [] ) {
+		global $wpdb;
+
+		$table = FW_POS_Schema::table( 'items' );
+		$where = self::build_item_where( $args );
+		$sql   = "SELECT COUNT(*) FROM {$table} {$where['sql']}";
+
+		if ( empty( $where['params'] ) ) {
+			return (int) $wpdb->get_var( $sql ); // phpcs:ignore WordPress.DB.PreparedSQL
+		}
+
+		return (int) $wpdb->get_var( $wpdb->prepare( $sql, $where['params'] ) ); // phpcs:ignore WordPress.DB.PreparedSQL
+	}
+
+	/**
+	 * Item counts keyed by status, for the Unmatched screen's status links.
+	 *
+	 * @return array<string,int>
+	 */
+	public static function item_status_counts() {
+		global $wpdb;
+
+		$table = FW_POS_Schema::table( 'items' );
+
+		$rows = (array) $wpdb->get_results(
+			"SELECT status, COUNT(*) AS total FROM {$table} GROUP BY status", // phpcs:ignore WordPress.DB.PreparedSQL
+			ARRAY_A
+		);
+
+		$counts = [];
+
+		foreach ( $rows as $row ) {
+			$counts[ $row['status'] ] = (int) $row['total'];
+		}
+
+		return $counts;
+	}
+
+	/**
+	 * Re-open every event that was skipped for a given reason, so it can be
+	 * processed again.
+	 *
+	 * This is what makes "skip loudly instead of dropping" pay off: once a
+	 * store driver is connected, or an unmatched SKU is mapped, the events that
+	 * could not be applied before are still here and still replayable.
+	 *
+	 * @param string $reason_prefix e.g. 'no_store_driver', 'unmatched_sku'
+	 *
+	 * @return int Rows re-queued.
+	 */
+	public static function requeue_skipped( $reason_prefix ) {
+		global $wpdb;
+
+		$table = FW_POS_Schema::table( 'events' );
+
+		return (int) $wpdb->query(
+			$wpdb->prepare(
+				"UPDATE {$table} SET state = %s, error = NULL, attempts = 0 WHERE state = %s AND error LIKE %s", // phpcs:ignore WordPress.DB.PreparedSQL
+				self::STATE_PENDING,
+				self::STATE_SKIPPED,
+				$wpdb->esc_like( (string) $reason_prefix ) . '%'
+			)
+		);
+	}
+
 	/* ---------------------------------------------------------------------- *
 	 * Internals
 	 * ---------------------------------------------------------------------- */
+
+	/**
+	 * Shared WHERE builder for query_items()/count_items().
+	 *
+	 * @param array $args
+	 *
+	 * @return array{sql:string,params:array}
+	 */
+	private static function build_item_where( array $args ) {
+		$clauses = [];
+		$params  = [];
+
+		if ( ! empty( $args['status'] ) ) {
+			$clauses[] = 'status = %s';
+			$params[]  = (string) $args['status'];
+		}
+
+		if ( ! empty( $args['search'] ) ) {
+			global $wpdb;
+
+			$like      = '%' . $wpdb->esc_like( (string) $args['search'] ) . '%';
+			$clauses[] = '(sku LIKE %s OR gtin LIKE %s OR name LIKE %s)';
+			$params[]  = $like;
+			$params[]  = $like;
+			$params[]  = $like;
+		}
+
+		return [
+			'sql'    => $clauses ? 'WHERE ' . implode( ' AND ', $clauses ) : '',
+			'params' => $params,
+		];
+	}
 
 	/**
 	 * Shared WHERE builder for query_events()/count_events(), so the two can

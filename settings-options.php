@@ -20,6 +20,19 @@ $options = [
 							'live' => __( 'Live — apply events to the store', 'fw' ),
 						],
 					],
+					'store_driver'  => [
+						'label'   => __( 'Store', 'fw' ),
+						'desc'    => __( 'Which e-commerce plugin owns the stock this syncs to. Only one can be active — two carts writing the same stock from one event stream would fight, and there is no sensible arbitration. Left on automatic, a single installed cart is chosen for you; with several installed you must pick.', 'fw' ),
+						'type'    => 'select',
+						'value'   => '',
+						'choices' => class_exists( 'FW_POS_Stores' ) ? FW_POS_Stores::choices() : [ '' => __( 'Detect automatically', 'fw' ) ],
+					],
+					'create_orders' => [
+						'label' => __( 'Record till sales as store orders', 'fw' ),
+						'desc'  => __( 'Off by default. Your POS already reports its own takings, so mirroring every counter sale into the store double-counts revenue across the two systems and buries genuine online orders among walk-ins. Turn this on only if you want one order list for everything. Stock is synced either way.', 'fw' ),
+						'type'  => 'switch',
+						'value' => false,
+					],
 					'retention'     => [
 						'label' => __( 'Keep events for (days)', 'fw' ),
 						'desc'  => __( 'How long to keep the audit log. Applied events older than this are pruned; failed ones are always kept. Set to 0 to keep everything forever.', 'fw' ),

@@ -12,15 +12,20 @@ Roadmap (auto-derived from this source tree): <https://docs.unysonplus.com/exten
 Schema      includes/class-fw-pos-schema.php     — the ONLY DDL
 Ledger      includes/class-fw-pos-ledger.php     — the ONLY SQL
 Queue       includes/class-fw-pos-queue.php      — ordering, retries, the apply filter
-Log/Admin   includes/class-fw-pos-log*.php · views/log.php
+Matcher     includes/class-fw-pos-matcher.php    — SKU/GTIN resolution, unmatched queue
+Applier     includes/class-fw-pos-applier.php    — events → store writes
+Stores      includes/stores/…                    — the ONLY cart-specific code
+Log/Admin   includes/class-fw-pos-log*.php · class-fw-pos-items-table.php · views/log.php
 ```
 
-Two rules keep it honest, and every future milestone depends on them:
+Three rules keep it honest, and every future milestone depends on them:
 
 - **Nothing above the ledger writes SQL.** Need a new query? Add a ledger method. Never
-  `$wpdb->prepare()` in the queue, an admin class, or a driver.
+  `$wpdb->prepare()` in the queue, the applier, an admin class, or a driver.
 - **The ledger holds no business rules and fires no hooks.** It is dumb on purpose, so a
   batch operation can call it in a loop with no side effects.
+- **Nothing outside `stores/` knows which cart is installed.** No `wc_*` call, no
+  `WC_Product`, no post ID with implied meaning may appear above the seam.
 
 ## Why this is not part of the WooCommerce extension
 
@@ -87,15 +92,52 @@ every load. (The Newsletter CRM's AGENTS.md has the longer version; same rules.)
   unmatched SKU will still be unmatched in five minutes; retrying it five times just fills
   the log.
 
-## Adding a store driver (Milestone 2)
+## The store seam
 
-Implement `FW_POS_Store` and hook `fw_pos_apply_event`. Return
-`['ok' => true, 'result' => [...]]` on success, or
-`['ok' => false, 'retry' => bool, 'error' => 'token']` otherwise — where `retry` is true
-only for transient conditions (the cart is down), never for decisions (the SKU is unknown).
+`FW_POS_Store` is the contract; `FW_POS_Stores` resolves exactly one active driver;
+`FW_POS_Applier` is its only consumer and the sole implementation of the queue's
+`fw_pos_apply_event` filter.
 
-Declare capabilities honestly. Claiming `partial_refunds` you cannot deliver produces
-silently wrong refunds, which is worse than declaring `false`.
+**Everything crossing the seam is a primitive.** A SKU string, an integer quantity, an
+opaque `store_ref` (`product:42`, `variation:87`) only the issuing driver has to
+understand. The moment a `WC_Product` crosses that line the abstraction is over.
+
+**Why `find_by_sku()` returns a string, not an int.** A post ID is a WooCommerce-shaped
+answer. The interface was drafted against FluentCart too, whose items are rows in its own
+tables, and an int would not have survived that. Same reason `get_capabilities()` exists
+at all — carts genuinely differ, and the ledger must degrade rather than fatal.
+
+To add a driver: extend `FW_POS_Store`, implement all nine methods, register through
+`fw_pos_store_drivers`. **Declare capabilities honestly** — claiming `partial_refunds` you
+cannot deliver produces silently wrong refunds, which is strictly worse than declaring
+`false` and having the refund skipped with a legible reason.
+
+### Rules the applier enforces, which a driver must not undo
+
+- **`retry: true` means transient, `retry: false` means a decision.** "The cart is down"
+  is worth retrying; "this SKU does not exist" will be just as true in five minutes and
+  retrying it five times only fills the log.
+- **`stock_not_managed` is not a failure.** Plenty of catalogs deliberately do not track
+  stock on some products. Treating it as an error retries forever.
+- **An event with any unresolvable line is skipped WHOLE.** Half a sale leaves stock wrong
+  in a way nobody can see.
+- **Order creation is opt-in.** A shop's POS already reports its takings; mirroring every
+  counter sale into the cart double-counts revenue and buries online orders among walk-ins.
+
+### Matching
+
+SKU first, GTIN second, **never name**. Two products called "Blue Hoodie" would swap stock
+with nothing in the log to say it happened.
+
+- **Unmatched items are queued, never auto-created.** Inventing products from till data
+  fills a catalog with `MISC-1` within days, and the merchant then cleans up a mess that
+  looks like their own doing.
+- **A human mapping beats a fresh lookup.** Someone bound that SKU to a specific product
+  for a reason; re-deriving it every event would quietly undo them.
+- **`ignored` wins over everything.** It is how carrier bags and service charges stop
+  filling the queue.
+- **Mapping a SKU re-queues what it blocked** (`FW_POS_Ledger::requeue_skipped()`). That
+  payoff is the whole reason skipped events keep their payload.
 
 ## Testing
 
@@ -103,14 +145,27 @@ There is no POS hardware and there does not need to be. Milestone 4 ships the Vi
 Terminal; until then the ledger and queue are directly testable — they have no POS and no
 cart dependency, which is the point of building this layer first.
 
-`tests/milestone-1.php` covers all of it — 36 assertions across idempotency, ordering,
-staleness, retry policy and the log helpers. It installs the tables, exercises them, and
-drops them again, so it is safe to re-run and leaves the site as it found it:
+Two suites, both safe to re-run and both leaving the site as they found it:
 
 ```bash
 php wp-cli.phar --path='<a WordPress install>' \
   eval-file wp-content/plugins/unysonplus/framework/extensions/pos-sync/tests/milestone-1.php
+php wp-cli.phar --path='<a WordPress install>' \
+  eval-file wp-content/plugins/unysonplus/framework/extensions/pos-sync/tests/milestone-2.php
 ```
+
+- **`milestone-1.php`** — 36 assertions: idempotency, ordering, staleness, retry policy,
+  log helpers.
+- **`milestone-2.php`** — 44 assertions: the seam, matching, applying, atomicity, retry
+  classification, test mode, recovery. It runs against a **fake in-memory driver, not
+  WooCommerce**, which is the point: everything above the seam is cart-agnostic, so its
+  tests must not need a cart. The fake also makes capability negotiation and store-write
+  failures producible on demand.
+
+> **wp-cli scoping.** Both suites publish what their helpers need through `$GLOBALS`.
+> `wp eval-file` runs a file *inside a function*, so top-level variables are locals and a
+> `global $x` in a helper finds nothing. This bit both suites once — silently in the first
+> (a tally stuck at 0/0) and as a fatal in the second.
 
 **Run it after any change to the ledger or the queue.** Two of its cases are worth
 understanding before editing either, because they look like the same rule and are not:
