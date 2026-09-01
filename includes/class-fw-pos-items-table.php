@@ -36,6 +36,7 @@ class FW_POS_Items_Table extends WP_List_Table {
 			'name'    => __( 'Reported name', 'fw' ),
 			'gtin'    => __( 'Barcode', 'fw' ),
 			'match'   => __( 'Matched product', 'fw' ),
+			'policy'  => __( 'Stock owner', 'fw' ),
 			'updated' => __( 'Last seen', 'fw' ),
 		];
 	}
@@ -195,6 +196,35 @@ class FW_POS_Items_Table extends WP_List_Table {
 
 		return ( $label ? esc_html( $label ) . '<br>' : '' )
 			. '<code>' . esc_html( $item['store_ref'] ) . '</code>';
+	}
+
+	/**
+	 * @param array $item
+	 *
+	 * @return string
+	 */
+	public function column_policy( $item ) {
+		$store_owned = 'store' === $item['policy'];
+
+		$out = sprintf(
+			'<span class="fw-pos-badge %s">%s</span>',
+			$store_owned ? 'is-neutral' : 'is-applied',
+			$store_owned ? esc_html__( 'Store', 'fw' ) : esc_html__( 'POS', 'fw' )
+		);
+
+		$out .= $this->row_actions(
+			[
+				'policy' => sprintf(
+					'<a href="%s">%s</a>',
+					esc_url( $this->action_url( $store_owned ? 'policy_pos' : 'policy_store', (int) $item['id'] ) ),
+					$store_owned
+						? esc_html__( 'Let the till manage this', 'fw' )
+						: esc_html__( 'Store owns this stock', 'fw' )
+				),
+			]
+		);
+
+		return $out;
 	}
 
 	/**

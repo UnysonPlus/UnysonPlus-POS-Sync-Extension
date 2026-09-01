@@ -146,6 +146,66 @@ abstract class FW_POS_Store {
 	abstract public function refund_order( $order_ref, array $lines, $restock = true );
 
 	/* ---------------------------------------------------------------------- *
+	 * Optional — concrete, with a safe default
+	 * ---------------------------------------------------------------------- */
+
+	/**
+	 * How much this driver has been proven.
+	 *
+	 * `stable`       — verified against a real install.
+	 * `experimental` — written against a documented API, never run against the
+	 *                  real thing. Shown as a badge everywhere the driver is
+	 *                  offered, because discovering it mid-trading-day is not
+	 *                  the same as being told up front.
+	 *
+	 * An experimental driver is not a half-finished one. It is a complete driver
+	 * whose assumptions have not been checked, which is why `is_available()`
+	 * should verify those assumptions rather than merely detecting the plugin.
+	 *
+	 * @return string
+	 */
+	public function maturity() {
+		return 'stable';
+	}
+
+	/**
+	 * Why this driver is not available, for the settings screen and the
+	 * diagnostic report.
+	 *
+	 * "Not installed" and "installed but incompatible" are different problems
+	 * wanting different responses, and for an experimental driver the second one
+	 * is the whole bug report.
+	 *
+	 * @return string
+	 */
+	public function unavailable_reason() {
+		return '';
+	}
+
+	/**
+	 * Find products by SKU or name, for admin pickers.
+	 *
+	 * CONCRETE, not abstract, and returning nothing by default. This is a
+	 * convenience for the Virtual Terminal and the unmatched screen, not part of
+	 * the sync contract — a driver for a cart with no searchable catalog (a
+	 * hosted store behind a rate-limited API, say) should be able to skip it
+	 * without being unimplementable. A picker that finds nothing degrades to
+	 * typing a SKU, which is exactly what the till does anyway.
+	 *
+	 * Adding this as an abstract method would have forced every future driver to
+	 * implement a feature it may have no way to provide, which is how an
+	 * interface starts accumulating stubs that throw.
+	 *
+	 * @param string $term
+	 * @param int    $limit
+	 *
+	 * @return array[] Each: { sku, name, store_ref, stock (int|null) }
+	 */
+	public function search_products( $term, $limit = 20 ) {
+		return [];
+	}
+
+	/* ---------------------------------------------------------------------- *
 	 * Shared helpers — concrete on purpose
 	 * ---------------------------------------------------------------------- */
 

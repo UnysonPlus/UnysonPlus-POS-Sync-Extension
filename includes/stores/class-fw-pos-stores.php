@@ -38,7 +38,12 @@ class FW_POS_Stores {
 		 */
 		$classes = apply_filters(
 			'fw_pos_store_drivers',
-			[ 'woocommerce' => 'FW_POS_Store_WooCommerce' ]
+			[
+				'woocommerce' => 'FW_POS_Store_WooCommerce',
+				'fluentcart'  => 'FW_POS_Store_FluentCart',
+				'surecart'    => 'FW_POS_Store_SureCart',
+				'edd'         => 'FW_POS_Store_EDD',
+			]
 		);
 
 		self::$drivers = [];
@@ -142,16 +147,51 @@ class FW_POS_Stores {
 		$choices = [ '' => __( 'Detect automatically', 'fw' ) ];
 
 		foreach ( self::all() as $id => $driver ) {
+			$label = $driver->get_label();
+
+			// The badge travels with the name everywhere the driver is offered,
+			// so it cannot be chosen without seeing it.
+			if ( 'stable' !== $driver->maturity() ) {
+				$label .= ' — ' . __( 'experimental', 'fw' );
+			}
+
 			$choices[ $id ] = $driver->is_available()
-				? $driver->get_label()
+				? $label
 				: sprintf(
 					/* translators: %s: cart name */
-					__( '%s (not installed)', 'fw' ),
-					$driver->get_label()
+					__( '%s (not available)', 'fw' ),
+					$label
 				);
 		}
 
 		return $choices;
+	}
+
+	/**
+	 * Drivers that are present but whose expectations were not met, with the
+	 * reason. This is the list a bug report is made of.
+	 *
+	 * @return array<string,string>
+	 */
+	public static function incompatible() {
+		$found = [];
+
+		foreach ( self::all() as $id => $driver ) {
+			if ( $driver->is_available() ) {
+				continue;
+			}
+
+			$reason = $driver->unavailable_reason();
+
+			// Only report drivers whose CART is present — "not installed" is not
+			// an incompatibility, and listing every uninstalled cart as a
+			// problem would bury the one that matters.
+			if ( $reason && false === stripos( $reason, 'not installed' ) ) {
+				$found[ $id ] = $reason;
+			}
+		}
+
+		return $found;
 	}
 
 	/**

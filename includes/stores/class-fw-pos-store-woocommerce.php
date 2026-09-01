@@ -338,6 +338,56 @@ class FW_POS_Store_WooCommerce extends FW_POS_Store {
 		];
 	}
 
+	/**
+	 * @param string $term
+	 * @param int    $limit
+	 *
+	 * @return array[]
+	 */
+	public function search_products( $term, $limit = 20 ) {
+		if ( ! $this->is_available() || ! function_exists( 'wc_get_products' ) ) {
+			return [];
+		}
+
+		$term = trim( (string) $term );
+
+		// Variations are included explicitly: variable products carry their SKUs
+		// there, so a picker that lists only parents shows nothing sellable.
+		$args = [
+			'limit'    => max( 1, (int) $limit ),
+			'status'   => 'publish',
+			'type'     => [ 'simple', 'variation', 'variable' ],
+			'orderby'  => 'title',
+			'order'    => 'ASC',
+			'return'   => 'objects',
+		];
+
+		if ( '' !== $term ) {
+			$args['s'] = $term;
+		}
+
+		$found = [];
+
+		foreach ( (array) wc_get_products( $args ) as $product ) {
+			$sku = trim( (string) $product->get_sku() );
+
+			// No SKU means nothing to match a till line against, so listing it
+			// would only invite someone to pick an unusable product.
+			if ( '' === $sku ) {
+				continue;
+			}
+
+			$found[] = [
+				'sku'       => $sku,
+				'name'      => $product->get_name(),
+				'store_ref' => $this->ref_for( $product->get_id() ),
+				'stock'     => $product->get_manage_stock() ? (int) $product->get_stock_quantity() : null,
+			];
+		}
+
+		return $found;
+	}
+
 	/* ---------------------------------------------------------------------- *
 	 * Internals
 	 * ---------------------------------------------------------------------- */

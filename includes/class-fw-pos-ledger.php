@@ -740,6 +740,150 @@ class FW_POS_Ledger {
 		);
 	}
 
+	/**
+	 * Set an item's authority override.
+	 *
+	 * @param int    $item_id
+	 * @param string $policy '' (site default) | 'pos' | 'store'
+	 *
+	 * @return bool
+	 */
+	public static function set_item_policy( $item_id, $policy ) {
+		global $wpdb;
+
+		$policy = in_array( $policy, [ 'pos', 'store' ], true ) ? $policy : '';
+
+		return (bool) $wpdb->update(
+			FW_POS_Schema::table( 'items' ),
+			[
+				'policy'     => $policy,
+				'updated_at' => current_time( 'mysql', true ),
+			],
+			[ 'id' => (int) $item_id ],
+			[ '%s', '%s' ],
+			[ '%d' ]
+		);
+	}
+
+	/* ---------------------------------------------------------------------- *
+	 * Operations — health, retention, reconciliation
+	 * ---------------------------------------------------------------------- */
+
+	/**
+	 * When the oldest waiting event happened.
+	 *
+	 * Queue DEPTH alone is a poor signal: twenty events that arrived a second
+	 * ago is a busy shop, while one event stuck for six hours is a broken site.
+	 * Age is what distinguishes them.
+	 *
+	 * @return string|null MySQL datetime, or null when nothing is waiting.
+	 */
+	public static function oldest_pending_at() {
+		global $wpdb;
+
+		$table = FW_POS_Schema::table( 'events' );
+
+		$value = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT received_at FROM {$table} WHERE state = %s ORDER BY received_at ASC LIMIT 1", // phpcs:ignore WordPress.DB.PreparedSQL
+				self::STATE_PENDING
+			)
+		);
+
+		return $value ? $value : null;
+	}
+
+	/**
+	 * Per-state event counts since a point in time.
+	 *
+	 * @param int $since Unix timestamp.
+	 *
+	 * @return array<string,int>
+	 */
+	public static function state_counts_since( $since ) {
+		global $wpdb;
+
+		$table = FW_POS_Schema::table( 'events' );
+
+		$rows = (array) $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT state, COUNT(*) AS total FROM {$table} WHERE received_at >= %s GROUP BY state", // phpcs:ignore WordPress.DB.PreparedSQL
+				gmdate( 'Y-m-d H:i:s', (int) $since )
+			),
+			ARRAY_A
+		);
+
+		$counts = [];
+
+		foreach ( $rows as $row ) {
+			$counts[ $row['state'] ] = (int) $row['total'];
+		}
+
+		return $counts;
+	}
+
+	/**
+	 * How many events a connection has sent since a point in time.
+	 *
+	 * @param int $connection_id
+	 * @param int $since
+	 *
+	 * @return int
+	 */
+	public static function count_for_connection( $connection_id, $since ) {
+		global $wpdb;
+
+		$table = FW_POS_Schema::table( 'events' );
+
+		return (int) $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT COUNT(*) FROM {$table} WHERE connection_id = %d AND received_at >= %s", // phpcs:ignore WordPress.DB.PreparedSQL
+				(int) $connection_id,
+				gmdate( 'Y-m-d H:i:s', (int) $since )
+			)
+		);
+	}
+
+	/**
+	 * Delete settled events older than a cutoff.
+	 *
+	 * FAILED events are never pruned, whatever the retention setting says. They
+	 * are the ones somebody still has to look at, and a retention policy that
+	 * quietly deletes the evidence of a problem is worse than no retention
+	 * policy. `pending` is likewise left alone — it has not finished.
+	 *
+	 * @param int $days
+	 * @param int $limit Batch size, so a huge backlog does not time out.
+	 *
+	 * @return int Rows removed.
+	 */
+	public static function prune( $days, $limit = 1000 ) {
+		global $wpdb;
+
+		$days = (int) $days;
+
+		if ( $days < 1 ) {
+			return 0; // 0 means keep everything, deliberately.
+		}
+
+		$table  = FW_POS_Schema::table( 'events' );
+		$cutoff = gmdate( 'Y-m-d H:i:s', time() - ( $days * DAY_IN_SECONDS ) );
+
+		return (int) $wpdb->query(
+			$wpdb->prepare(
+				"DELETE FROM {$table}
+				WHERE received_at < %s
+				  AND state IN (%s, %s, %s)
+				LIMIT %d", // phpcs:ignore WordPress.DB.PreparedSQL
+				$cutoff,
+				self::STATE_APPLIED,
+				self::STATE_DUPLICATE,
+				self::STATE_SKIPPED,
+				(int) $limit
+			)
+		);
+	}
+
 	/* ---------------------------------------------------------------------- *
 	 * Internals
 	 * ---------------------------------------------------------------------- */

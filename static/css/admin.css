@@ -91,3 +91,150 @@
 .fw-pos-requeue {
 	margin: 0 0 12px;
 }
+
+/* Connections. The issued-credential panel is deliberately loud: it is the one
+   moment the secret is visible, and a viewer who scrolls past it has to rotate. */
+.fw-pos-issued h3 {
+	margin: 12px 0 4px;
+}
+
+.fw-pos-credential {
+	margin: 12px 0;
+	border-collapse: collapse;
+}
+
+.fw-pos-credential th {
+	text-align: left;
+	padding: 4px 16px 4px 0;
+	vertical-align: top;
+	white-space: nowrap;
+	color: #646970;
+	font-weight: 500;
+}
+
+.fw-pos-credential td {
+	padding: 4px 0;
+}
+
+.fw-pos-credential code {
+	user-select: all;
+	font-size: 13px;
+}
+
+.fw-pos-revoked td {
+	opacity: .6;
+}
+
+.fw-pos-example-row td {
+	background: #f6f7f7;
+}
+
+.fw-pos-example {
+	margin: 8px 0 0;
+	padding: 12px;
+	background: #1d2327;
+	color: #f0f0f1;
+	border-radius: 4px;
+	overflow-x: auto;
+	font-size: 12px;
+	line-height: 1.6;
+}
+
+/* Virtual Terminal */
+.fw-pos-vt-controls {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px 12px;
+	align-items: center;
+	margin: 16px 0 6px;
+	padding: 12px 16px;
+	background: #fff;
+	border: 1px solid #c3c4c7;
+	border-radius: 4px;
+}
+
+.fw-pos-transport-note {
+	max-width: 62em;
+	margin: 0 0 16px;
+}
+
+.fw-pos-vt-results {
+	margin: 16px 0 24px;
+	padding: 4px 20px 16px;
+	background: #fff;
+	border: 1px solid #c3c4c7;
+	border-left-width: 4px;
+	border-radius: 4px;
+}
+
+.fw-pos-vt-steps {
+	margin: 12px 0 0 0;
+	padding: 0;
+	list-style: none;
+}
+
+.fw-pos-vt-steps li {
+	display: flex;
+	gap: 8px;
+	align-items: baseline;
+	padding: 4px 0;
+}
+
+.fw-pos-vt-mark {
+	font-weight: 700;
+	width: 1em;
+}
+
+.fw-pos-vt-steps .is-ok .fw-pos-vt-mark {
+	color: #007017;
+}
+
+.fw-pos-vt-steps .is-bad .fw-pos-vt-mark {
+	color: #b32d2e;
+}
+
+.fw-pos-vt-steps code {
+	font-size: 11px;
+	color: #646970;
+	background: transparent;
+}
+
+.fw-pos-scenarios td form {
+	margin: 0;
+}
+
+.fw-pos-scenarios .description {
+	max-width: 34em;
+}
+
+/* Health */
+.fw-pos-problems {
+	margin: 8px 0 8px 20px;
+	list-style: disc;
+}
+
+.fw-pos-problems li {
+	margin: 4px 0;
+	max-width: 70em;
+}
+
+.fw-pos-inline-form {
+	display: inline-block;
+	margin: 0;
+}
+
+/* Diagnostics. Monospace and full width because the report is meant to be
+   selected wholesale and pasted, not read line by line in the browser. */
+.fw-pos-diagnostics {
+	width: 100%;
+	max-width: 100%;
+	font-family: Consolas, Monaco, monospace;
+	font-size: 12px;
+	line-height: 1.5;
+	background: #f6f7f7;
+}
+
+.fw-pos-experimental {
+	color: #996800;
+	border-color: currentColor;
+}

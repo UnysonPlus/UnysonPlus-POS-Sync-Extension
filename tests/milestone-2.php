@@ -35,6 +35,8 @@ require_once $dir . 'includes/stores/class-fw-pos-store.php';
 require_once $dir . 'includes/stores/class-fw-pos-store-woocommerce.php';
 require_once $dir . 'includes/stores/class-fw-pos-stores.php';
 require_once $dir . 'includes/class-fw-pos-applier.php';
+require_once $dir . 'includes/class-fw-pos-secrets.php';
+require_once $dir . 'includes/class-fw-pos-connections.php';
 
 global $wpdb;
 

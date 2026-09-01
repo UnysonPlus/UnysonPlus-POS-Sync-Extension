@@ -69,7 +69,8 @@ class FW_POS_Applier {
 		// Test mode runs the whole pipeline — matching included, so the
 		// unmatched queue still fills up and a shop can fix its SKUs before
 		// going live — and stops only at the write.
-		$dry_run = ! $this->ext->is_live();
+		//
+		$dry_run = ! $this->is_live_for( $event );
 
 		switch ( $event['type'] ) {
 			case FW_POS_Ledger::TYPE_SALE:
@@ -84,6 +85,40 @@ class FW_POS_Applier {
 		}
 
 		return $this->fail( 'unknown_event_type: ' . $event['type'], false );
+	}
+
+	/**
+	 * May this event change real stock?
+	 *
+	 * Both the site-wide setting and the connection's own must say live. The
+	 * global one is a master switch: someone flipping the whole site to test to
+	 * investigate a problem should not have to remember which of six tills is
+	 * individually set to live.
+	 *
+	 * The guard covers the WHOLE branch, not just the lookup. An earlier version
+	 * guarded `FW_POS_Connections::get()` with class_exists() and then called
+	 * `FW_POS_Connections::is_live()` unconditionally, which fatals in exactly
+	 * the situation the guard existed for.
+	 *
+	 * @param array $event
+	 *
+	 * @return bool
+	 */
+	private function is_live_for( array $event ) {
+		if ( ! $this->ext->is_live() ) {
+			return false;
+		}
+
+		// No connection (recorded in code, or before connections existed), or
+		// the connections layer is not loaded: the global setting alone decides.
+		if ( empty( $event['connection_id'] ) || ! class_exists( 'FW_POS_Connections' ) ) {
+			return true;
+		}
+
+		return FW_POS_Connections::is_live(
+			FW_POS_Connections::get( (int) $event['connection_id'] ),
+			$this->ext
+		);
 	}
 
 	/* ---------------------------------------------------------------------- *
@@ -128,6 +163,12 @@ class FW_POS_Applier {
 		$moves = [];
 
 		foreach ( $matched['lines'] as $line ) {
+			if ( ! $this->pos_may_write( $line ) ) {
+				$moves[] = $this->refused( $line );
+
+				continue;
+			}
+
 			$quantity = isset( $line['quantity'] ) ? (int) $line['quantity'] : 1;
 			$outcome  = $store->adjust_stock( $line['store_ref'], -abs( $quantity ), $event['location_ref'] );
 
@@ -213,6 +254,12 @@ class FW_POS_Applier {
 		$moves = [];
 
 		foreach ( $matched['lines'] as $line ) {
+			if ( ! $this->pos_may_write( $line ) ) {
+				$moves[] = $this->refused( $line );
+
+				continue;
+			}
+
 			$quantity = isset( $line['quantity'] ) ? (int) $line['quantity'] : 1;
 			$outcome  = $store->adjust_stock( $line['store_ref'], abs( $quantity ), $event['location_ref'] );
 
@@ -266,6 +313,12 @@ class FW_POS_Applier {
 		$moves = [];
 
 		foreach ( $matched['lines'] as $line ) {
+			if ( ! $this->pos_may_write( $line ) ) {
+				$moves[] = $this->refused( $line );
+
+				continue;
+			}
+
 			$quantity = isset( $line['quantity'] ) ? (int) $line['quantity'] : 0;
 
 			$outcome = 'absolute' === $mode
@@ -314,6 +367,45 @@ class FW_POS_Applier {
 			'ok'    => false,
 			'retry' => (bool) $retry,
 			'error' => (string) $error,
+		];
+	}
+
+	/**
+	 * Is the POS allowed to write stock for this line?
+	 *
+	 * A per-product override exists for the awkward cases — an online-only
+	 * bundle, a made-to-order item — whose stock the till has no business
+	 * touching. Refusing one line does NOT fail the event: it is a deliberate
+	 * configuration choice, not an error, and the rest of the sale still applies.
+	 *
+	 * @param array $line
+	 *
+	 * @return bool
+	 */
+	private function pos_may_write( array $line ) {
+		if ( ! class_exists( 'FW_POS_Policy' ) ) {
+			return true;
+		}
+
+		$item = ! empty( $line['item_id'] ) ? FW_POS_Ledger::get_item( (int) $line['item_id'] ) : null;
+
+		return FW_POS_Policy::pos_owns_stock( $item );
+	}
+
+	/**
+	 * A movement row for a line the policy refused.
+	 *
+	 * @param array $line
+	 *
+	 * @return array
+	 */
+	private function refused( array $line ) {
+		return [
+			'sku'    => isset( $line['sku'] ) ? (string) $line['sku'] : '',
+			'ref'    => isset( $line['store_ref'] ) ? (string) $line['store_ref'] : '',
+			'before' => null,
+			'after'  => null,
+			'error'  => 'policy_store_owned',
 		];
 	}
 

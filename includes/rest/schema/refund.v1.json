@@ -1,0 +1,56 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://docs.unysonplus.com/schema/pos/refund.v1.json",
+  "title": "POS Sync — refund v1",
+  "description": "Money and usually goods coming back. Omit line_items for a full refund of the referenced sale; include a subset for a partial one, which is the case most integrations get wrong.",
+  "type": "object",
+  "required": [ "external_id", "occurred_at" ],
+  "additionalProperties": true,
+  "properties": {
+    "external_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "description": "The refund's own id — NOT the sale's. Stable across retries."
+    },
+    "sale_external_id": {
+      "type": "string",
+      "maxLength": 100,
+      "description": "The sale being refunded. May reference a sale not yet received: out-of-order delivery is normal, so the refund is held rather than rejected."
+    },
+    "occurred_at": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}[Tt ]\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?([Zz]|[+-]\\d{2}:?\\d{2})$"
+    },
+    "location_ref": { "type": "string", "maxLength": 100 },
+    "reason": { "type": "string", "maxLength": 190 },
+    "restock": {
+      "type": "boolean",
+      "description": "Defaults to true. Send false for damaged goods that should not go back on the shelf — the money returns, the stock does not."
+    },
+    "partial": {
+      "type": "boolean",
+      "description": "Declares this as a partial refund of the referenced sale. A store driver that cannot do partials refuses it rather than silently refunding everything."
+    },
+    "line_items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [ "quantity" ],
+        "anyOf": [ { "required": [ "sku" ] }, { "required": [ "gtin" ] } ],
+        "properties": {
+          "sku": { "type": "string", "maxLength": 100 },
+          "gtin": { "type": "string", "maxLength": 64 },
+          "name": { "type": "string", "maxLength": 190 },
+          "quantity": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Positive — the quantity coming back, not a negative sale."
+          },
+          "unit_price": { "type": "integer" }
+        }
+      }
+    },
+    "meta": { "type": "object" }
+  }
+}

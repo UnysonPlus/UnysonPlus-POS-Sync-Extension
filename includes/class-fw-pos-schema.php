@@ -24,14 +24,14 @@
 class FW_POS_Schema {
 
 	/** Bump whenever the schema below changes, or it never reaches an existing site. */
-	const DB_VERSION = '1.0.0';
+	const DB_VERSION = '1.3.0';
 
 	const DB_VERSION_OPTION = 'fw_ext_pos_sync_db_version';
 
 	/**
 	 * Fully-qualified table name for a logical table.
 	 *
-	 * @param string $table items|events|map
+	 * @param string $table items|events|map|connections
 	 *
 	 * @return string
 	 */
@@ -95,6 +95,22 @@ class FW_POS_Schema {
 	 *  - **`payload` stores the request verbatim.** It is what makes an event
 	 *    replayable and auditable a year later, and it is the reason a support
 	 *    question can be answered from an event id alone.
+	 *  - **`credentials` holds a provider's own tokens**, encrypted, as JSON: a
+	 *    Square OAuth access token, its refresh token, the expiry, the merchant
+	 *    id, the webhook signature key. Separate from `secret` because they are
+	 *    different things with different lifecycles — `secret` is OUR shared
+	 *    secret for the generic endpoint and is rotated by us, while these are
+	 *    someone else's tokens that expire and refresh on their schedule.
+	 *    Squeezing both into one column would mean a Square reconnection
+	 *    silently invalidating a generic webhook's credential.
+	 *  - **A connection's `secret` is stored ENCRYPTED, not hashed.** HMAC
+	 *    verification has to recompute the signature, which means the plaintext
+	 *    secret must be recoverable — a hash cannot do that. See
+	 *    FW_POS_Secrets for what that does and does not protect against.
+	 *  - **`items.policy` is the per-product authority override**, empty for the
+	 *    site default. It exists as a column rather than an option because the
+	 *    lookup happens once per line item on the hot path, and an option array
+	 *    of every overridden SKU would be read and unserialised on every event.
 	 *  - **`sku` is indexed but NOT unique.** A SKU legitimately exists in the
 	 *    POS before it exists in the store, and two connections may report the
 	 *    same SKU. Matching resolves that; the schema must not pre-empt it.
@@ -104,9 +120,10 @@ class FW_POS_Schema {
 	 * @return array
 	 */
 	private static function schema( $collate ) {
-		$items  = self::table( 'items' );
-		$events = self::table( 'events' );
-		$map    = self::table( 'map' );
+		$items       = self::table( 'items' );
+		$events      = self::table( 'events' );
+		$map         = self::table( 'map' );
+		$connections = self::table( 'connections' );
 
 		$sql = [];
 
@@ -117,6 +134,7 @@ class FW_POS_Schema {
 	name varchar(190) NOT NULL default '',
 	store_ref varchar(64) NOT NULL default '',
 	status varchar(20) NOT NULL default 'unmatched',
+	policy varchar(20) NOT NULL default '',
 	last_count_at datetime default NULL,
 	created_at datetime NOT NULL default '0000-00-00 00:00:00',
 	updated_at datetime NOT NULL default '0000-00-00 00:00:00',
@@ -149,6 +167,31 @@ class FW_POS_Schema {
 	KEY received_at (received_at)
 ) {$collate};";
 
+		// One row per till or integration. Separate from events so a connection
+		// can be rotated, revoked or renamed without touching a shop's audit
+		// trail — and so a misbehaving terminal is identifiable by name rather
+		// than by a bare id in the log.
+		$sql[] = "CREATE TABLE {$connections} (
+	id bigint(20) unsigned NOT NULL auto_increment,
+	name varchar(190) NOT NULL default '',
+	type varchar(30) NOT NULL default 'generic',
+	api_key varchar(64) NOT NULL default '',
+	secret longtext,
+	credentials longtext,
+	mode varchar(10) NOT NULL default 'test',
+	scopes varchar(255) NOT NULL default '',
+	location_ref varchar(100) NOT NULL default '',
+	status varchar(20) NOT NULL default 'active',
+	last_seen_at datetime default NULL,
+	last_skew smallint(6) NOT NULL default 0,
+	created_at datetime NOT NULL default '0000-00-00 00:00:00',
+	updated_at datetime NOT NULL default '0000-00-00 00:00:00',
+	PRIMARY KEY  (id),
+	UNIQUE KEY api_key (api_key),
+	KEY status (status),
+	KEY type (type)
+) {$collate};";
+
 		$sql[] = "CREATE TABLE {$map} (
 	id bigint(20) unsigned NOT NULL auto_increment,
 	connection_id bigint(20) unsigned NOT NULL default 0,
@@ -178,9 +221,21 @@ class FW_POS_Schema {
 			return; // Fresh install; the schema above is already current.
 		}
 
-		// Example of the shape future steps take:
+		// 1.1.0 added the connections table. dbDelta creates it above, so there
+		// is nothing destructive to do here — but events recorded by 1.0.x carry
+		// connection_id 0, which is correct: they predate connections entirely
+		// and must not be retro-attributed to whichever one is created first.
 		//
-		// if ( version_compare( $from, '1.1.0', '<' ) ) {
+		// 1.2.0 added connections.credentials. Also additive — dbDelta handles
+		// it — and existing generic connections correctly have it NULL, since a
+		// generic webhook has no provider tokens.
+		//
+		// 1.3.0 added items.policy. Additive; existing rows correctly default to
+		// empty, which means "follow the site setting".
+		//
+		// Future destructive steps take this shape:
+		//
+		// if ( version_compare( $from, '1.2.0', '<' ) ) {
 		//     global $wpdb;
 		//     $wpdb->query( 'ALTER TABLE ' . self::table( 'events' ) . ' DROP COLUMN legacy_col' );
 		// }
@@ -196,7 +251,7 @@ class FW_POS_Schema {
 	public static function uninstall() {
 		global $wpdb;
 
-		foreach ( [ 'events', 'map', 'items' ] as $table ) {
+		foreach ( [ 'events', 'map', 'items', 'connections' ] as $table ) {
 			$wpdb->query( 'DROP TABLE IF EXISTS ' . self::table( $table ) ); // phpcs:ignore WordPress.DB.PreparedSQL
 		}
 

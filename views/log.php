@@ -168,6 +168,46 @@ $status = $this->get_status();
 			</form>
 		<?php endif; ?>
 
+	<?php elseif ( 'connections' === $tab ) : ?>
+
+		<?php
+		$connections_view = $this->view_path( 'connections' );
+
+		if ( $connections_view ) {
+			include $connections_view;
+		}
+		?>
+
+	<?php elseif ( 'terminal' === $tab ) : ?>
+
+		<?php
+		$terminal_view = $this->view_path( 'virtual-terminal' );
+
+		if ( $terminal_view ) {
+			include $terminal_view;
+		}
+		?>
+
+	<?php elseif ( 'import' === $tab ) : ?>
+
+		<?php
+		$import_view = $this->view_path( 'import' );
+
+		if ( $import_view ) {
+			include $import_view;
+		}
+		?>
+
+	<?php elseif ( 'health' === $tab ) : ?>
+
+		<?php
+		$health_view = $this->view_path( 'health' );
+
+		if ( $health_view ) {
+			include $health_view;
+		}
+		?>
+
 	<?php else : ?>
 
 		<form method="post">
@@ -188,13 +228,6 @@ $status = $this->get_status();
 			</p>
 		</form>
 
-		<hr>
-
-		<h3><?php esc_html_e( 'Endpoint', 'fw' ); ?></h3>
-		<p class="description">
-			<?php esc_html_e( 'Tills and middleware will post to this base URL once connections are available in a later release.', 'fw' ); ?>
-		</p>
-		<p><code><?php echo esc_html( $status['endpoint'] ); ?></code></p>
 
 	<?php endif; ?>
 

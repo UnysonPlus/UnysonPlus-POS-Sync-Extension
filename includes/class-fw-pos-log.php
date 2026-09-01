@@ -117,6 +117,7 @@ class FW_POS_Log {
 			'insert_failed'        => __( 'The event could not be written to the database.', 'fw' ),
 			'unmatched_sku'        => __( 'No product matches this SKU. Map it on the Unmatched screen and re-run the event.', 'fw' ),
 			'apply_failed'         => __( 'The store rejected the change. See the error detail below.', 'fw' ),
+			'policy_store_owned'   => __( 'This item is set to store-owned stock, so the till is not allowed to change it. That is a deliberate per-product override, not a fault.', 'fw' ),
 		];
 
 		foreach ( $known as $token => $message ) {

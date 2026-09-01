@@ -138,6 +138,10 @@ class FW_POS_Admin_Page {
 	private function handle_actions() {
 		$this->handle_item_actions();
 		$this->handle_bulk_item_actions();
+		FW_POS_Connections_Page::handle_actions( $this );
+		FW_POS_Terminal_Page::handle_actions( $this );
+		FW_POS_Square_Page::handle_actions( $this );
+		FW_POS_Import_Page::handle_actions( $this );
 
 		if ( empty( $_POST['fw_pos_action'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification
 			return;
@@ -178,6 +182,51 @@ class FW_POS_Admin_Page {
 				$notice = [
 					'type' => 'success',
 					'text' => __( 'Database tables checked and brought up to date.', 'fw' ),
+				];
+				break;
+
+			case 'reconcile':
+				$report = ( new FW_POS_Reconciler() )->run();
+				$notice = [
+					'type' => empty( $report['drift'] ) ? 'success' : 'warning',
+					'text' => empty( $report['drift'] )
+						? sprintf(
+							/* translators: %d: items checked */
+							__( 'Checked %d items — no drift. This is the state you want every morning.', 'fw' ),
+							(int) $report['checked']
+						)
+						: sprintf(
+							/* translators: 1: number of differences, 2: items checked */
+							__( 'Found %1$d differences across %2$d items. Nothing has been changed — review them below, then apply if they look right.', 'fw' ),
+							count( $report['drift'] ),
+							(int) $report['checked']
+						),
+				];
+				break;
+
+			case 'apply_reconciliation':
+				$applied = FW_POS_Reconciler::apply_report();
+				FW_POS_Reconciler::clear_report();
+				$notice = [
+					'type' => 'success',
+					'text' => sprintf(
+						/* translators: %d: number of corrections queued */
+						__( 'Queued %d corrections as stocktake events, so they go through ordering and the authority policy like any other count — and appear in the log rather than changing stock invisibly.', 'fw' ),
+						(int) $applied['queued']
+					),
+				];
+				break;
+
+			case 'prune':
+				$settings = $this->ext->get_settings();
+				$pruned   = FW_POS_Ledger::prune( (int) $settings['retention'] );
+				$notice   = [
+					'type' => 'success',
+					'text' => sprintf(
+						/* translators: %d: number of events removed */
+						__( 'Removed %d settled events. Failed ones are always kept, whatever the retention setting says.', 'fw' ),
+						$pruned
+					),
 				];
 				break;
 
@@ -258,6 +307,22 @@ class FW_POS_Admin_Page {
 
 			case 'rematch_item':
 				$notice = $this->rematch( $item_id );
+				break;
+
+			case 'policy_store':
+				FW_POS_Ledger::set_item_policy( $item_id, 'store' );
+				$notice = [
+					'type' => 'success',
+					'text' => __( 'The store now owns this item\'s stock. Till events mentioning it are recorded and logged, but will not change the level — for an online-only bundle or a made-to-order item, that is the point.', 'fw' ),
+				];
+				break;
+
+			case 'policy_pos':
+				FW_POS_Ledger::set_item_policy( $item_id, '' );
+				$notice = [
+					'type' => 'success',
+					'text' => __( 'The till manages this item\'s stock again.', 'fw' ),
+				];
 				break;
 
 			default:
@@ -370,6 +435,52 @@ class FW_POS_Admin_Page {
 	}
 
 	/**
+	 * Resolve one of the extension's view files, for a tab partial.
+	 *
+	 * @param string $name
+	 *
+	 * @return string|false
+	 */
+	public function view_path( $name ) {
+		return $this->ext->locate_view_path( $name );
+	}
+
+	/**
+	 * Stash a notice for after the redirect.
+	 *
+	 * @param string $type
+	 * @param string $text
+	 */
+	public static function notice( $type, $text ) {
+		set_transient(
+			self::TRANSIENT_NOTICE . get_current_user_id(),
+			[
+				'type' => $type,
+				'text' => $text,
+			],
+			MINUTE_IN_SECONDS
+		);
+	}
+
+	/**
+	 * PRG redirect back to a tab.
+	 *
+	 * @param string $tab
+	 */
+	public static function redirect( $tab ) {
+		wp_safe_redirect(
+			add_query_arg(
+				[
+					'page' => self::PAGE_SLUG,
+					'tab'  => $tab,
+				],
+				admin_url( 'admin.php' )
+			)
+		);
+		exit;
+	}
+
+	/**
 	 * PRG redirect back to a tab.
 	 *
 	 * @param string $tab
@@ -414,7 +525,7 @@ class FW_POS_Admin_Page {
 		// phpcs:ignore WordPress.Security.NonceVerification
 		$tab = isset( $_GET['tab'] ) ? sanitize_key( wp_unslash( $_GET['tab'] ) ) : 'log';
 
-		return in_array( $tab, [ 'log', 'items', 'settings' ], true ) ? $tab : 'log';
+		return in_array( $tab, [ 'log', 'items', 'connections', 'terminal', 'import', 'health', 'settings' ], true ) ? $tab : 'log';
 	}
 
 	/**
@@ -432,6 +543,8 @@ class FW_POS_Admin_Page {
 			? FW_POS_Ledger::count_items( [ 'status' => FW_POS_Ledger::ITEM_UNMATCHED ] )
 			: 0;
 
+		$problems = FW_POS_Health::problems();
+
 		$tabs = [
 			'log'      => __( 'Log', 'fw' ),
 			'items'    => $unmatched
@@ -441,7 +554,17 @@ class FW_POS_Admin_Page {
 					$unmatched
 				)
 				: __( 'Items', 'fw' ),
-			'settings' => __( 'Settings', 'fw' ),
+			'connections' => __( 'Connections', 'fw' ),
+			'terminal'    => __( 'Virtual Terminal', 'fw' ),
+			'import'      => __( 'Import', 'fw' ),
+			'health'      => $problems
+				? sprintf(
+					/* translators: %d: number of problems */
+					__( 'Health (%d)', 'fw' ),
+					count( $problems )
+				)
+				: __( 'Health', 'fw' ),
+			'settings'    => __( 'Settings', 'fw' ),
 		];
 
 		$view = $this->ext->locate_view_path( 'log' );
@@ -494,7 +617,11 @@ class FW_POS_Admin_Page {
 			'unmatched'   => FW_POS_Schema::is_installed()
 				? FW_POS_Ledger::count_items( [ 'status' => FW_POS_Ledger::ITEM_UNMATCHED ] )
 				: 0,
-			'endpoint'    => rest_url( 'unysonplus-pos/v1/' ),
+			'connections' => FW_POS_Schema::is_installed() ? FW_POS_Connections::count_active() : 0,
+			'problems'    => FW_POS_Health::problems(),
+			'endpoint'    => FW_POS_REST_Controller::base_url(),
+			'tunnelled'   => defined( 'FW_POS_PUBLIC_URL' ) && FW_POS_PUBLIC_URL,
+			'encryption'  => FW_POS_Secrets::available(),
 		];
 	}
 }
