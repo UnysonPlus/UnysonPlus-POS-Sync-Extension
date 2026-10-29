@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+	<!--
+		Extension thumbnail. House convention (see chat / newsletter-crm /
+		animation-engine): 256x256, NO background plate, monochrome #ffffff only —
+		the Extensions manager paints the 128px tile behind it — and the glyph is
+		centred and scaled to roughly half the tile so it sits at the same optical
+		size as its siblings. Hence the outer translate/scale wrapper; stroke-width
+		is set so it lands at ~12px effective once scaled, like the rest of family.
+
+		A card terminal whose screen shows the sync symbol, with the card slot
+		below: the till, and the thing this extension does with it.
+
+		Sizing note, learned by rendering it beside the others rather than by
+		eye: the sync arcs have to be LARGE relative to the stroke or they mush
+		into a blob at tile size. A first pass used r=34 against an 18px stroke —
+		barely twice the stroke — and the two arrows read as one squiggle. r=38
+		with the same stroke, and no keypad dots competing for the space, keeps
+		the arrowheads and both gaps legible. The dots were dropped for that
+		reason and because three dots in a rounded shape would have echoed the
+		Chat bubble sitting two cards away.
+	-->
+	<g transform="translate(128,128) scale(0.66) translate(-128,-128)"
+	   fill="none" stroke="#ffffff" stroke-width="18"
+	   stroke-linecap="round" stroke-linejoin="round">
+
+		<!-- The terminal body. -->
+		<rect x="58" y="40" width="140" height="176" rx="24"/>
+
+		<!-- Sync: two arcs with a gap left and right, the universal glyph. -->
+		<path d="M91.3 106.2 A38 38 0 0 1 164.7 106.2"/>
+		<polyline points="172.4,84.4 164.7,106.2 147.2,91.2"/>
+
+		<path d="M164.7 125.8 A38 38 0 0 1 91.3 125.8"/>
+		<polyline points="108.8,140.8 91.3,125.8 83.6,147.6"/>
+
+		<!-- The card slot — what makes this a terminal rather than a phone. -->
+		<line x1="88" y1="186" x2="168" y2="186"/>
+	</g>
+</svg>

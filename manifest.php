@@ -11,9 +11,12 @@ $manifest['description'] = __(
 	'fw'
 );
 
-$manifest['version']    = '1.1.1';
+$manifest['version']    = '1.1.2';
 $manifest['display']    = true;
 $manifest['standalone'] = true;
+
+// Extension-card icon (resolved relative to this extension folder).
+$manifest['thumbnail']  = 'thumbnail.svg';
 
 // Repository Info
 $manifest['github_update'] = 'UnysonPlus/UnysonPlus-POS-Sync-Extension';
